@@ -11,7 +11,7 @@ const { toJson, kw } = require('../src/edn');
 const index = require('../src/index');
 const hover = require('../src/hover');
 
-const root = path.join(__dirname, '..', '..', 'conformance', 'polyglot');
+const root = path.join(__dirname, '..', 'conformance', 'polyglot');
 const expected = JSON.parse(fs.readFileSync(path.join(root, '..', 'expected.json'), 'utf8'));
 const idx = index.build(index.config(root));
 const REGISTRY_PROBLEMS = new Set(['conflicting-values', 'unreadable-registry-file']);

@@ -21,6 +21,8 @@ EDN registry files, the questions and the shape of their answers, and the
 each reader indexes the code in its own language, and about the registry
 both answer the same. `conformance/` holds that promise: its expected
 answers come from the Clojure reader, and both readers' tests check them.
+It is a copy of [meta-source's](https://github.com/semantic-namespace/meta-source/tree/main/conformance), which writes
+`expected.json`: copy it here when it changes there.
 
 Files are parsed with TypeScript's parser. Nothing is compiled, loaded or
 run.
@@ -83,7 +85,7 @@ tag, or a reference to one — says.
 {"id":1,"op":"hover-at","file":"/abs/web/receipt.ts","line":6,"col":34,"text":"<the line>"}
 ```
 
-[`vscode/`](../vscode) is a VS Code extension that runs both readers for a
+[`vscode/`](https://github.com/semantic-namespace/meta-source/tree/main/vscode), in meta-source, is a VS Code extension that runs both readers for a
 folder with `meta-source.edn`, and asks both for go to definition and find
 references: from an id in an EDN file, its Clojure var and its TypeScript
 declaration alike.
@@ -116,5 +118,5 @@ npx -p github:semantic-namespace/meta-source-js -p <the pack's package> meta-sou
 
 ```sh
 npm install && npm test   # conformance, and this reader's own tests
-bb conformance            # the Clojure reader against the same answers
+bb conformance            # in meta-source: the Clojure reader against the same answers
 ```

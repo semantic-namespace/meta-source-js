@@ -11,7 +11,7 @@ const index = require('../src/index');
 const hover = require('../src/hover');
 
 const { kw, toJson } = edn;
-const polyglot = path.join(__dirname, '..', '..', 'conformance', 'polyglot');
+const polyglot = path.join(__dirname, '..', 'conformance', 'polyglot');
 const routes = path.join(__dirname, 'fixtures', 'routes');
 const idx = index.build(index.config(polyglot));
 const bin = path.join(__dirname, '..', 'bin', 'meta-source-js.js');
