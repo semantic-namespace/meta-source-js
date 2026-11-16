@@ -46,7 +46,7 @@ const asStrings = (v, dflt) => (v == null ? dflt : itemsOf(v).map(String));
 
 /**
  * The settings in root/meta-source.edn, the file the Clojure reader reads:
- * :registry, :src, :id-key, :dataflow, :merge, and :js {:packs {"module" opts}}
+ * :registry, :src, :id-key, :dataflow, :relations, :merge, and :js {:packs {"module" opts}}
  * for packs this reader runs. Keys only the Clojure reader knows are ignored.
  */
 function config(root, overrides = {}) {
@@ -72,6 +72,7 @@ function config(root, overrides = {}) {
       consumes: dataflow instanceof Map ? itemsOf(dataflow.get(kw('consumes'))) : [],
       produces: dataflow instanceof Map ? itemsOf(dataflow.get(kw('produces'))) : [],
     },
+    relations: g('relations') === undefined ? new Map() : g('relations'),
     merge: g('merge') instanceof Map ? new Map([...g('merge')].map(([k, v]) => [k, String(v)])) : new Map(),
     packs: packs instanceof Map ? [...packs].map(([spec, opts]) => ({ spec: String(spec), opts })) : [],
   };
@@ -99,8 +100,8 @@ function resolvePack(root, spec) {
 function loadPack(root, spec) {
   const p = require(resolvePack(root, spec));
   const pack = p && (p.pack || p.default || p);
-  if (!pack || !pack.id || !(pack.check || pack.entities || pack.describe))
-    throw new Error(`${spec}: a pack is an object with an id and check, entities or describe`);
+  if (!pack || !pack.id || !(pack.check || pack.entities || pack.describe || pack.relations))
+    throw new Error(`${spec}: a pack is an object with an id and check, entities, describe or relations`);
   return pack;
 }
 
@@ -185,6 +186,13 @@ function build(cfg) {
       entities.set(id, { id, entry: new Map(), kind: 'binding', definitions: [{ kind: 'binding', file: rel(vs[0].file), line: vs[0].line, keys: [], binding: true }] });
 
   idx.entities = new Map([...entities].sort(([a], [b]) => compareKeywords(a, b)));
+  const relations = relationsOf(cfg, idx.packs);
+  idx.relations = relations.verbs;
+  idx.relationsProblems = relations.problems;
+  idx.dataflow = {
+    consumes: [...relations.verbs].filter(([, v]) => v === kw('consumes')).map(([k]) => k),
+    produces: [...relations.verbs].filter(([, v]) => v === kw('produces')).map(([k]) => k),
+  };
   idx.readProblems = [
     ...readProblems,
     ...merged.conflicts.map((c) => ({ problem: kw('conflicting-values'), 'dev-id': c.id, key: c.key,
@@ -202,6 +210,59 @@ function build(cfg) {
 }
 
 const toKw = (x) => (x instanceof edn.Keyword ? x : kw(String(x)));
+
+// The verbs meta-source itself acts on: :depends a dependency, :consumes and
+// :produces the dataflow. Any other verb is a qualified keyword, a relation
+// of the project's own: not a dependency.
+const RESERVED_VERBS = [kw('consumes'), kw('depends'), kw('produces')];
+
+/** True when an edge of verb is a dependency: :depends, or untyped. */
+const isDependency = (verb) => verb == null || verb === kw('depends');
+
+/**
+ * What each entry key's ids are, as the Clojure reader says: [[key verb
+ * source given]] claims from meta-source.edn's :relations and :dataflow, and
+ * each pack's `relations` ({"ns/key": "ns/verb"}); {verbs, problems}, a key
+ * given two verbs a :conflicting-relations error that leaves it untyped.
+ */
+function relationsOf(cfg, packs) {
+  const claims = [];
+  const ofRelations = (m, source) => {
+    if (!(m instanceof Map)) return claims.push([null, null, source, m]);
+    for (const [k, r] of m) claims.push([k, r instanceof Map ? r.get(kw('verb')) : null, source, r]);
+  };
+  ofRelations(cfg.relations, 'meta-source.edn');
+  for (const [verb, ks] of [[kw('consumes'), cfg.dataflow.consumes], [kw('produces'), cfg.dataflow.produces]])
+    for (const k of ks) claims.push([k, verb, 'meta-source.edn']);
+  for (const { pack } of packs)
+    if (pack.relations)
+      for (const [k, v] of Object.entries(pack.relations)) claims.push([kw(k), kw(String(v)), kw(pack.id)]);
+  const ok = ([k, v]) => k instanceof edn.Keyword && (RESERVED_VERBS.includes(v) || isQualifiedKeyword(v));
+  const byKey = new Map();
+  for (const c of claims.filter(ok)) {
+    if (!byKey.has(c[0])) byKey.set(c[0], []);
+    byKey.get(c[0]).push(c);
+  }
+  const verbs = new Map();
+  const problems = [];
+  for (const [k, v, source, given] of claims.filter((c) => !ok(c))) {
+    const reason = k == null ? ':relations is a map of entry key to {:verb v}'
+      : !(k instanceof edn.Keyword) ? 'an entry key is a keyword'
+      : `a verb is one of (${RESERVED_VERBS.map(prStr).join(' ')}) or a qualified keyword`;
+    const p = { severity: 'error', problem: kw('relation-not-understood'), source, reason };
+    if (k instanceof edn.Keyword) Object.assign(p, { property: k, given });
+    problems.push(p);
+  }
+  for (const [k, cs] of [...byKey].sort(([a], [b]) => a.text.slice(1).localeCompare(b.text.slice(1)))) {
+    const vs = [...new Set(cs.map((c) => c[1]))];
+    if (vs.length === 1) verbs.set(k, vs[0]);
+    else
+      problems.push({ severity: 'error', problem: kw('conflicting-relations'), property: k,
+                      verbs: new Map(vs.sort((a, b) => a.text.localeCompare(b.text))
+                        .map((v) => [v, [...new Set(cs.filter((c) => c[1] === v).map((c) => c[2]))]])) });
+  }
+  return { verbs, problems };
+}
 
 function normaliseProblem(p, pack) {
   const out = { ...p, problem: toKw(p.problem), pack: pack.id };
@@ -276,7 +337,7 @@ function where(idx, id) {
   };
 }
 
-/** [[key, id]] for every entity an entry names in its values. */
+/** [[key, id, verb]] for every entity an entry names in its values; verb, what the relations say key is (null: untyped). */
 function references(idx, entry) {
   const out = [];
   const seen = new Set();
@@ -284,7 +345,7 @@ function references(idx, entry) {
     for (const x of walk(v))
       if (isQualifiedKeyword(x) && idx.entities.has(x)) {
         const sig = prStr(k) + ' ' + x.text;
-        if (!seen.has(sig)) seen.add(sig), out.push([k, x]);
+        if (!seen.has(sig)) seen.add(sig), out.push([k, x, idx.relations.get(k) || null]);
       }
   return out;
 }
@@ -308,7 +369,8 @@ function uses(idx, id) {
   return {
     'dev-id': id,
     'referenced-by': [...idx.entities].flatMap(([other, e]) =>
-      references(idx, e.entry).filter(([, x]) => x === id).map(([prop]) => ({ 'dev-id': other, via: prop, definition: loc(idx, e) }))),
+      references(idx, e.entry).filter(([, x]) => x === id)
+        .map(([prop, , verb]) => ({ 'dev-id': other, via: prop, definition: loc(idx, e), ...(verb ? { verb } : {}) }))),
     'called-from': impl
       ? refsTo(idx, impl).map((r) => {
           const c = { var: `${path.relative(idx.root, r.file)}#${r.from || '(top level)'}`, file: path.relative(idx.root, r.file), line: r.line };
@@ -325,13 +387,14 @@ function dependencies(idx, id) {
   const e = idx.entities.get(id);
   if (!e) return null;
   return { 'dev-id': id,
-           'depends-on': references(idx, e.entry).map(([prop, x]) => ({ 'dev-id': x, via: prop, definition: loc(idx, idx.entities.get(x)) })) };
+           'depends-on': references(idx, e.entry).map(([prop, x, verb]) =>
+             ({ 'dev-id': x, via: prop, definition: loc(idx, idx.entities.get(x)), ...(verb ? { verb } : {}) })) };
 }
 
-/** The data keys entry consumes and produces: the values of the keys :dataflow lists. */
+/** The data keys entry consumes and produces: the values of the keys whose verb is :consumes or :produces (:dataflow, :relations). */
 function contractKeys(idx, entry) {
   const declared = (ks) => new Set(ks.flatMap((k) => itemsOf(entry.get(k))));
-  return { consumes: declared(idx.cfg.dataflow.consumes), produces: declared(idx.cfg.dataflow.produces) };
+  return { consumes: declared(idx.dataflow.consumes), produces: declared(idx.dataflow.produces) };
 }
 
 function dataKey(idx, k) {
@@ -352,6 +415,7 @@ const RANK = { error: 0, warning: 1 };
 function check(idx) {
   const ps = [
     ...idx.readProblems.map((p) => ({ ...p, severity: 'error' })),
+    ...idx.relationsProblems,
     ...[...idx.linked].filter(([, vs]) => vs.length > 1)
       .map(([id, vs]) => ({ severity: 'error', problem: kw('dev-id-on-several-vars'), 'dev-id': id, vars: vs.map((v) => varLoc(idx, v)) })),
     ...[...idx.entities].filter(([, e]) => e.kind === 'binding')
@@ -377,6 +441,6 @@ function summary(idx) {
 }
 
 module.exports = {
-  context, config, build, where, uses, dependencies, dataKey, check, summary, contractKeys, implOf, refsTo, varLoc,
+  context, config, build, where, uses, dependencies, isDependency, dataKey, check, summary, contractKeys, implOf, refsTo, varLoc,
   compareKeywords, sortKeywords, DEFAULT_ID_KEY,
 };

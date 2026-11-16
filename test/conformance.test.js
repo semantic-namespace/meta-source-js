@@ -14,7 +14,7 @@ const hover = require('../src/hover');
 const root = path.join(__dirname, '..', 'conformance', 'polyglot');
 const expected = JSON.parse(fs.readFileSync(path.join(root, '..', 'expected.json'), 'utf8'));
 const idx = index.build(index.config(root));
-const REGISTRY_PROBLEMS = new Set(['conflicting-values', 'unreadable-registry-file']);
+const REGISTRY_PROBLEMS = new Set(['conflicting-values', 'unreadable-registry-file', 'conflicting-relations', 'relation-not-understood']);
 
 const scalar = (x) => x === null || ['string', 'number', 'boolean'].includes(typeof x);
 function deepSort(x) {

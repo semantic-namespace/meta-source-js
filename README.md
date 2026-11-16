@@ -41,7 +41,7 @@ flags: `where`, `uses`, `deps`, `data`, `check` (`--brief`, `--fail-on`),
 `--src`. Answers are JSON, as the Clojure command's `--json`.
 
 `meta-source.edn` is the one the Clojure reader reads. This reader uses
-`:registry`, `:src`, `:id-key`, `:dataflow` and `:merge`, and `:js` for its
+`:registry`, `:src`, `:id-key`, `:dataflow`, `:relations` and `:merge`, and `:js` for its
 own settings; it ignores the rest. In `:src`, it reads `.ts`, `.tsx`, `.mts`,
 `.cts`, `.js`, `.jsx`, `.mjs` and `.cjs` files (not `.d.ts`), and skips
 `node_modules`.
@@ -99,6 +99,9 @@ A JS pack is a module exporting an object with an `id` and any of:
   to value, `ctx.kw(':ns/name')` for keywords);
 - `check(ctx)` → `[{severity, problem, 'dev-id', file, line, message}]`;
 - `describe(ctx, id, entry)` → the line a hover shows under the id.
+- `relations` → `{'ns/key': 'ns/verb'}`: what an entry key's ids are, as
+  `:relations` in `meta-source.edn` says (`'depends'`, `'consumes'`,
+  `'produces'`, or a qualified verb of the pack's own).
 
 `ctx` gives `opts` (the pack's options from `meta-source.edn`), `vars()`,
 `refs()`, `entities()`, `implOf(id)`, `refsTo(var)`, `sourceFile(file)` (the
