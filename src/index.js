@@ -188,6 +188,7 @@ function build(cfg) {
   idx.entities = new Map([...entities].sort(([a], [b]) => compareKeywords(a, b)));
   const relations = relationsOf(cfg, idx.packs);
   idx.relations = relations.verbs;
+  idx.depending = relations.depending;
   idx.relationsProblems = relations.problems;
   idx.dataflow = {
     consumes: [...relations.verbs].filter(([, v]) => v === kw('consumes')).map(([k]) => k),
@@ -226,42 +227,63 @@ const isDependency = (verb) => verb == null || verb === kw('depends');
  * given two verbs a :conflicting-relations error that leaves it untyped.
  */
 function relationsOf(cfg, packs) {
+  // [key verb source given depends]
   const claims = [];
   const ofRelations = (m, source) => {
     if (!(m instanceof Map)) return claims.push([null, null, source, m]);
-    for (const [k, r] of m) claims.push([k, r instanceof Map ? r.get(kw('verb')) : null, source, r]);
+    for (const [k, r] of m)
+      claims.push([k, r instanceof Map ? r.get(kw('verb')) : null, source, r, r instanceof Map ? r.get(kw('depends')) : undefined]);
   };
   ofRelations(cfg.relations, 'meta-source.edn');
   for (const [verb, ks] of [[kw('consumes'), cfg.dataflow.consumes], [kw('produces'), cfg.dataflow.produces]])
     for (const k of ks) claims.push([k, verb, 'meta-source.edn']);
   for (const { pack } of packs)
     if (pack.relations)
-      for (const [k, v] of Object.entries(pack.relations)) claims.push([kw(k), kw(String(v)), kw(pack.id)]);
-  const ok = ([k, v]) => k instanceof edn.Keyword && (RESERVED_VERBS.includes(v) || isQualifiedKeyword(v));
+      for (const [k, v] of Object.entries(pack.relations)) {
+        const r = typeof v === 'object' && v !== null ? v : { verb: v };
+        claims.push([kw(k), kw(String(r.verb)), kw(pack.id), undefined, r.depends]);
+      }
+  const DATAFLOW = [kw('consumes'), kw('produces')];
+  const problemOf = ([k, v, , , depends]) =>
+    k == null ? ':relations is a map of entry key to {:verb v}'
+      : !(k instanceof edn.Keyword) ? 'an entry key is a keyword'
+      : !(RESERVED_VERBS.includes(v) || isQualifiedKeyword(v)) ? `a verb is one of (${RESERVED_VERBS.map(prStr).join(' ')}) or a qualified keyword`
+      : ![undefined, null, true, false].includes(depends) ? ':depends is true or false'
+      : depends === true && DATAFLOW.includes(v) ? "dataflow is no dependency: :depends true goes with :depends or a verb of the project's own"
+      : null;
+  // what reach makes of a claim: :depends, or a verb of its own marked :depends true
+  const dependsOf = ([, v, , , depends]) => v === kw('depends') || depends === true;
   const byKey = new Map();
-  for (const c of claims.filter(ok)) {
+  for (const c of claims.filter((c) => !problemOf(c))) {
     if (!byKey.has(c[0])) byKey.set(c[0], []);
     byKey.get(c[0]).push(c);
   }
   const verbs = new Map();
+  const depending = new Set();
   const problems = [];
-  for (const [k, v, source, given] of claims.filter((c) => !ok(c))) {
-    const reason = k == null ? ':relations is a map of entry key to {:verb v}'
-      : !(k instanceof edn.Keyword) ? 'an entry key is a keyword'
-      : `a verb is one of (${RESERVED_VERBS.map(prStr).join(' ')}) or a qualified keyword`;
+  for (const c of claims) {
+    const reason = problemOf(c);
+    if (!reason) continue;
+    const [k, , source, given] = c;
     const p = { severity: 'error', problem: kw('relation-not-understood'), source, reason };
     if (k instanceof edn.Keyword) Object.assign(p, { property: k, given });
     problems.push(p);
   }
   for (const [k, cs] of [...byKey].sort(([a], [b]) => a.text.slice(1).localeCompare(b.text.slice(1)))) {
     const vs = [...new Set(cs.map((c) => c[1]))];
-    if (vs.length === 1) verbs.set(k, vs[0]);
-    else
-      problems.push({ severity: 'error', problem: kw('conflicting-relations'), property: k,
-                      verbs: new Map(vs.sort((a, b) => a.text.localeCompare(b.text))
-                        .map((v) => [v, [...new Set(cs.filter((c) => c[1] === v).map((c) => c[2]))]])) });
+    const ds = [...new Set(cs.map(dependsOf))];
+    if (vs.length === 1 && ds.length === 1) {
+      verbs.set(k, vs[0]);
+      if (ds[0] && vs[0] !== kw('depends')) depending.add(k);
+    } else {
+      const sourcesOf = (f) => [...new Set(cs.filter(f).map((c) => c[2]))];
+      const p = { severity: 'error', problem: kw('conflicting-relations'), property: k,
+                  verbs: new Map(vs.sort((a, b) => a.text.localeCompare(b.text)).map((v) => [v, sourcesOf((c) => c[1] === v)])) };
+      if (vs.length === 1 && ds.length > 1) p.depends = new Map([[false, sourcesOf((c) => !dependsOf(c))], [true, sourcesOf(dependsOf)]]);
+      problems.push(p);
+    }
   }
-  return { verbs, problems };
+  return { verbs, depending, problems };
 }
 
 function normaliseProblem(p, pack) {
@@ -337,7 +359,12 @@ function where(idx, id) {
   };
 }
 
-/** [[key, id, verb]] for every entity an entry names in its values; verb, what the relations say key is (null: untyped). */
+/**
+ * [[key, id, verb, depends]] for every entity an entry names in its values;
+ * verb, what the relations say key is (null: untyped); depends, whether the
+ * edge is a dependency (untyped, :depends, or a verb of its own marked
+ * {:depends true}).
+ */
 function references(idx, entry) {
   const out = [];
   const seen = new Set();
@@ -345,7 +372,10 @@ function references(idx, entry) {
     for (const x of walk(v))
       if (isQualifiedKeyword(x) && idx.entities.has(x)) {
         const sig = prStr(k) + ' ' + x.text;
-        if (!seen.has(sig)) seen.add(sig), out.push([k, x, idx.relations.get(k) || null]);
+        if (!seen.has(sig)) {
+          const verb = idx.relations.get(k) || null;
+          seen.add(sig), out.push([k, x, verb, isDependency(verb) || idx.depending.has(k)]);
+        }
       }
   return out;
 }
@@ -370,7 +400,8 @@ function uses(idx, id) {
     'dev-id': id,
     'referenced-by': [...idx.entities].flatMap(([other, e]) =>
       references(idx, e.entry).filter(([, x]) => x === id)
-        .map(([prop, , verb]) => ({ 'dev-id': other, via: prop, definition: loc(idx, e), ...(verb ? { verb } : {}) }))),
+        .map(([prop, , verb, dep]) => ({ 'dev-id': other, via: prop, definition: loc(idx, e), ...(verb ? { verb } : {}),
+                                         ...(dep && !isDependency(verb) ? { depends: true } : {}) }))),
     'called-from': impl
       ? refsTo(idx, impl).map((r) => {
           const c = { var: `${path.relative(idx.root, r.file)}#${r.from || '(top level)'}`, file: path.relative(idx.root, r.file), line: r.line };
@@ -387,8 +418,9 @@ function dependencies(idx, id) {
   const e = idx.entities.get(id);
   if (!e) return null;
   return { 'dev-id': id,
-           'depends-on': references(idx, e.entry).map(([prop, x, verb]) =>
-             ({ 'dev-id': x, via: prop, definition: loc(idx, idx.entities.get(x)), ...(verb ? { verb } : {}) })) };
+           'depends-on': references(idx, e.entry).map(([prop, x, verb, dep]) =>
+             ({ 'dev-id': x, via: prop, definition: loc(idx, idx.entities.get(x)), ...(verb ? { verb } : {}),
+                ...(dep && !isDependency(verb) ? { depends: true } : {}) })) };
 }
 
 /** The data keys entry consumes and produces: the values of the keys whose verb is :consumes or :produces (:dataflow, :relations). */
