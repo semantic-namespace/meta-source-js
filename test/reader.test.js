@@ -6,6 +6,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const fs = require('fs');
+const os = require('os');
 const edn = require('../src/edn');
 const index = require('../src/index');
 const hover = require('../src/hover');
@@ -30,7 +32,8 @@ test('code referring to it, in its file and through an import, with the referrin
 });
 
 test('an id on two declarations is an error; a tag with no source saying anything is binding-only', () => {
-  const ps = toJson(index.check(idx)).filter((p) => p.problem !== 'conflicting-values');
+  // the registry's problems are conformance.test.js's
+  const ps = toJson(index.check(idx)).filter((p) => !['conflicting-values', 'relation-not-understood'].includes(p.problem));
   assert.deepStrictEqual(ps.map((p) => [p.severity, p.problem, p['dev-id']]),
                          [['error', 'dev-id-on-several-vars', 'fn/format-money'], ['info', 'binding-only', 'fn/format-money']]);
 });
@@ -104,4 +107,24 @@ test('EDN: lines of top-level keys, sets, tags, discards, and what is not readab
   assert.strictEqual(edn.keyedLines('[1 2]'), null);
   assert.throws(() => edn.keyedLines('{:a 1} :b'), /something after the map/);
   assert.throws(() => edn.keyedLines('{:a}'), /a key with no value/);
+});
+
+test('relations: a key given two verbs is untyped, an error naming who gave which; a pack gives relations; :relations carries dataflow', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ms-js-relations-'));
+  fs.mkdirSync(path.join(dir, 'registry'));
+  fs.writeFileSync(path.join(dir, 'registry', 'r.edn'),
+    '{:fn/run {:fn/deps [:fn/load] :fn/reads [:job/spec] :adr/notes [:fn/load]}\n :fn/load {}\n :job/spec {}}');
+  fs.writeFileSync(path.join(dir, 'pack.js'), "module.exports = { id: 'adr', relations: { 'adr/notes': 'adr/notes' } };");
+  fs.writeFileSync(path.join(dir, 'meta-source.edn'),
+    '{:registry ["registry"] :src [] :relations {:fn/reads {:verb :consumes} :fn/deps {:verb :depends}}\n' +
+    ' :dataflow {:produces [:fn/deps]} :js {:packs {"./pack.js" {}}}}');
+  const ri = index.build(index.config(dir));
+  const deps = toJson(index.dependencies(ri, kw(':fn/run'))['depends-on']).map((d) => [d['dev-id'], d.via, d.verb || null]);
+  assert.deepStrictEqual(deps, [['fn/load', 'fn/deps', null], ['job/spec', 'fn/reads', 'consumes'], ['fn/load', 'adr/notes', 'adr/notes']]);
+  assert.deepStrictEqual(toJson(index.check(ri)).filter((p) => p.problem === 'conflicting-relations'),
+                         [{ severity: 'error', problem: 'conflicting-relations', property: 'fn/deps',
+                            verbs: { depends: ['meta-source.edn'], produces: ['meta-source.edn'] } }]);
+  assert.deepStrictEqual(toJson(index.dataKey(ri, kw(':job/spec')).consumers.map((c) => c['dev-id'])), ['fn/run']);
+  assert.ok(index.isDependency(null) && index.isDependency(kw(':depends')) && !index.isDependency(kw(':adr/notes')));
+  fs.rmSync(dir, { recursive: true, force: true });
 });
