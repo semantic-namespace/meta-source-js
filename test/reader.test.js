@@ -128,3 +128,25 @@ test('relations: a key given two verbs is untyped, an error naming who gave whic
   assert.ok(index.isDependency(null) && index.isDependency(kw(':depends')) && !index.isDependency(kw(':adr/notes')));
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('relations: {:verb v :depends true} is a relation and a dependency; :depends given by one source and not another is a conflict', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ms-js-depends-'));
+  fs.mkdirSync(path.join(dir, 'registry'));
+  fs.writeFileSync(path.join(dir, 'registry', 'r.edn'), '{:wf/checkout {:wf/producers [:fn/charge] :wf/notes [:fn/charge]}\n :fn/charge {}}');
+  fs.writeFileSync(path.join(dir, 'pack.js'),
+    "module.exports = { id: 'wf', relations: { 'wf/producers': 'wf/has-producer', 'wf/notes': { verb: 'wf/notes', depends: true } } };");
+  fs.writeFileSync(path.join(dir, 'meta-source.edn'),
+    '{:registry ["registry"] :src [] :js {:packs {"./pack.js" {}}}\n' +
+    ' :relations {:wf/producers {:verb :wf/has-producer :depends true} :wf/notes {:verb :wf/notes :depends true}\n' +
+    '             :fn/reads {:verb :consumes :depends true}}}');
+  const ri = index.build(index.config(dir));
+  assert.deepStrictEqual(toJson(index.dependencies(ri, kw(':wf/checkout'))['depends-on']).map((d) => [d.via, d.verb || null, d.depends || null]),
+                         [['wf/producers', null, null], ['wf/notes', 'wf/notes', true]]);
+  const ps = toJson(index.check(ri));
+  assert.deepStrictEqual(ps.filter((p) => p.problem === 'conflicting-relations'),
+                         [{ severity: 'error', problem: 'conflicting-relations', property: 'wf/producers',
+                            verbs: { 'wf/has-producer': ['meta-source.edn', 'wf'] }, depends: { false: ['wf'], true: ['meta-source.edn'] } }]);
+  assert.deepStrictEqual(ps.filter((p) => p.problem === 'relation-not-understood').map((p) => p.reason),
+                         ["dataflow is no dependency: :depends true goes with :depends or a verb of the project's own"]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
