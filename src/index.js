@@ -425,7 +425,8 @@ function uses(idx, id) {
     'referenced-by': [...idx.entities].flatMap(([other, e]) =>
       references(idx, e.entry).filter(([, x]) => x === id)
         .map(([prop, , verb, dep]) => ({ 'dev-id': other, via: prop, definition: loc(idx, e), ...(verb ? { verb } : {}),
-                                         ...(dep && !isDependency(verb) ? { depends: true } : {}) }))),
+                                         ...(dep && !isDependency(verb) ? { depends: true } : {}),
+                                         ...(idx.untypedRelations.has(prop) ? { untyped: idx.untypedRelations.get(prop) } : {}) }))),
     'called-from': impl
       ? refsTo(idx, impl).map((r) => {
           const c = { var: `${path.relative(idx.root, r.file)}#${r.from || '(top level)'}`, file: path.relative(idx.root, r.file), line: r.line };
@@ -444,7 +445,9 @@ function dependencies(idx, id) {
   return { 'dev-id': id,
            'depends-on': references(idx, e.entry).map(([prop, x, verb, dep]) =>
              ({ 'dev-id': x, via: prop, definition: loc(idx, idx.entities.get(x)), ...(verb ? { verb } : {}),
-                ...(dep && !isDependency(verb) ? { depends: true } : {}) })) };
+                ...(dep && !isDependency(verb) ? { depends: true } : {}),
+                // a relation because no source types it, in that pack's untyped: 'relation' vocabulary
+                ...(idx.untypedRelations.has(prop) ? { untyped: idx.untypedRelations.get(prop) } : {}) })) };
 }
 
 /** The data keys entry consumes and produces: the values of the keys whose verb is :consumes or :produces (:dataflow, :relations). */

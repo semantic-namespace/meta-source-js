@@ -142,6 +142,8 @@ test("relations: a pack with untyped: 'relation' makes its vocabulary's undeclar
   assert.deepStrictEqual(toJson(index.dependencies(ri, kw(':adr/cache'))['depends-on']).map((d) => [d['dev-id'], d.verb || null, d.depends || null]),
                          [['risk/slow', 'adr/mitigates', null], ['db/main', 'depends', null], ['svc/mail', null, null]]);
   assert.deepStrictEqual(toJson(ri.untypedRelations), { 'adr/mitigates': 'adr' });
+  assert.deepStrictEqual(toJson(index.dependencies(ri, kw(':adr/cache'))['depends-on']).map((d) => d.untyped || null), ['adr', null, null]);
+  assert.deepStrictEqual(toJson(index.uses(ri, kw(':risk/slow'))['referenced-by']).map((r) => r.untyped), ['adr']);
   assert.deepStrictEqual(toJson(index.check(ri)).filter((p) => p.problem === 'relation-not-understood').map((p) => [p.source, p.given]),
                          [['bad', 'dependency']]);
   fs.rmSync(dir, { recursive: true, force: true });
