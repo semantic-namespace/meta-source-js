@@ -235,18 +235,24 @@ function relationsOf(cfg, packs, entities = new Map()) {
   const claims = [];
   const ofRelations = (m, source) => {
     if (!(m instanceof Map)) return claims.push([null, null, source, m]);
-    for (const [k, r] of m)
-      claims.push([k, r instanceof Map ? r.get(kw('verb')) : null, source, r, r instanceof Map ? r.get(kw('depends')) : undefined]);
+    // a key's relation, or several, each naming where it comes from (:source)
+    for (const [k, rs] of m)
+      for (const r of Array.isArray(rs) ? rs : [rs]) {
+        const from = r instanceof Map ? r.get(kw('source')) : undefined;
+        claims.push([k, r instanceof Map ? r.get(kw('verb')) : null, from === undefined ? source : `${source} ${prStr(from)}`,
+                     r, r instanceof Map ? r.get(kw('depends')) : undefined]);
+      }
   };
   ofRelations(cfg.relations, 'meta-source.edn');
   for (const [verb, ks] of [[kw('consumes'), cfg.dataflow.consumes], [kw('produces'), cfg.dataflow.produces]])
     for (const k of ks) claims.push([k, verb, 'meta-source.edn']);
   for (const { pack } of packs)
     if (pack.relations)
-      for (const [k, v] of Object.entries(pack.relations)) {
-        const r = typeof v === 'object' && v !== null ? v : { verb: v };
-        claims.push([kw(k), kw(String(r.verb)), kw(pack.id), undefined, r.depends]);
-      }
+      for (const [k, vs] of Object.entries(pack.relations))
+        for (const v of Array.isArray(vs) ? vs : [vs]) {
+          const r = typeof v === 'object' && v !== null ? v : { verb: v };
+          claims.push([kw(k), kw(String(r.verb)), r.source === undefined ? kw(pack.id) : `${pack.id} ${r.source}`, undefined, r.depends]);
+        }
   const DATAFLOW = [kw('consumes'), kw('produces')];
   const problemOf = ([k, v, , , depends]) =>
     k == null ? ':relations is a map of entry key to {:verb v}'
