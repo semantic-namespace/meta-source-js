@@ -129,6 +129,24 @@ test('relations: a key given two verbs is untyped, an error naming who gave whic
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("relations: a pack with untyped: 'relation' makes its vocabulary's undeclared keys relations; others stay dependencies", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ms-js-untyped-'));
+  fs.mkdirSync(path.join(dir, 'registry'));
+  fs.writeFileSync(path.join(dir, 'registry', 'r.edn'),
+    '{:adr/cache {:adr/mitigates [:risk/slow] :adr/needs [:db/main] :team/uses [:svc/mail]}\n :risk/slow {:k/x 1} :db/main {:k/x 1} :svc/mail {:k/x 1}}');
+  fs.writeFileSync(path.join(dir, 'pack.js'),
+    "module.exports = { id: 'adr', vocabulary: ['adr'], untyped: 'relation', relations: { 'adr/needs': 'depends' } };");
+  fs.writeFileSync(path.join(dir, 'bad.js'), "module.exports = { id: 'bad', untyped: 'dependency' };");
+  fs.writeFileSync(path.join(dir, 'meta-source.edn'), '{:registry ["registry"] :src [] :js {:packs {"./pack.js" {} "./bad.js" {}}}}');
+  const ri = index.build(index.config(dir));
+  assert.deepStrictEqual(toJson(index.dependencies(ri, kw(':adr/cache'))['depends-on']).map((d) => [d['dev-id'], d.verb || null, d.depends || null]),
+                         [['risk/slow', 'adr/mitigates', null], ['db/main', 'depends', null], ['svc/mail', null, null]]);
+  assert.deepStrictEqual(toJson(ri.untypedRelations), { 'adr/mitigates': 'adr' });
+  assert.deepStrictEqual(toJson(index.check(ri)).filter((p) => p.problem === 'relation-not-understood').map((p) => [p.source, p.given]),
+                         [['bad', 'dependency']]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('relations: {:verb v :depends true} is a relation and a dependency; :depends given by one source and not another is a conflict', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ms-js-depends-'));
   fs.mkdirSync(path.join(dir, 'registry'));

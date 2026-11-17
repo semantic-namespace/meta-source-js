@@ -103,6 +103,11 @@ A JS pack is a module exporting an object with an `id` and any of:
   `:relations` in `meta-source.edn` says (`'depends'`, `'consumes'`,
   `'produces'`, or a qualified verb of the pack's own); `{'ns/key': {verb:
   'ns/verb', depends: true}}` for a relation that is a dependency too.
+- `vocabulary` → `['ns', ...]`: the key namespaces its entries use, and
+  `untyped: 'relation'`: a key in them that no source gives a verb is a
+  relation by its own name, not a dependency (`:pack/untyped :relation` in
+  the Clojure reader). Other packs' keys and the project's own stay
+  dependencies.
 
 `ctx` gives `opts` (the pack's options from `meta-source.edn`), `vars()`,
 `refs()`, `entities()`, `implOf(id)`, `refsTo(var)`, `sourceFile(file)` (the

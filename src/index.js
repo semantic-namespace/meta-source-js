@@ -100,8 +100,8 @@ function resolvePack(root, spec) {
 function loadPack(root, spec) {
   const p = require(resolvePack(root, spec));
   const pack = p && (p.pack || p.default || p);
-  if (!pack || !pack.id || !(pack.check || pack.entities || pack.describe || pack.relations))
-    throw new Error(`${spec}: a pack is an object with an id and check, entities, describe or relations`);
+  if (!pack || !pack.id || !(pack.check || pack.entities || pack.describe || pack.relations || pack.untyped))
+    throw new Error(`${spec}: a pack is an object with an id and check, entities, describe, relations or untyped`);
   return pack;
 }
 
@@ -186,9 +186,10 @@ function build(cfg) {
       entities.set(id, { id, entry: new Map(), kind: 'binding', definitions: [{ kind: 'binding', file: rel(vs[0].file), line: vs[0].line, keys: [], binding: true }] });
 
   idx.entities = new Map([...entities].sort(([a], [b]) => compareKeywords(a, b)));
-  const relations = relationsOf(cfg, idx.packs);
+  const relations = relationsOf(cfg, idx.packs, idx.entities);
   idx.relations = relations.verbs;
   idx.depending = relations.depending;
+  idx.untypedRelations = relations.untyped;
   idx.relationsProblems = relations.problems;
   idx.dataflow = {
     consumes: [...relations.verbs].filter(([, v]) => v === kw('consumes')).map(([k]) => k),
@@ -225,8 +226,11 @@ const isDependency = (verb) => verb == null || verb === kw('depends');
  * source given]] claims from meta-source.edn's :relations and :dataflow, and
  * each pack's `relations` ({"ns/key": "ns/verb"}); {verbs, problems}, a key
  * given two verbs a :conflicting-relations error that leaves it untyped.
+ * A pack with `untyped: 'relation'`: a key in its `vocabulary` (namespaces)
+ * no source says anything of is a relation by its own name (untyped, {key
+ * pack-id}); another `untyped` is a relation not understood.
  */
-function relationsOf(cfg, packs) {
+function relationsOf(cfg, packs, entities = new Map()) {
   // [key verb source given depends]
   const claims = [];
   const ofRelations = (m, source) => {
@@ -269,6 +273,26 @@ function relationsOf(cfg, packs) {
     if (k instanceof edn.Keyword) Object.assign(p, { property: k, given });
     problems.push(p);
   }
+  // a key no source says anything of, in the vocabulary of a pack with
+  // untyped: 'relation': a relation by its own name
+  const said = new Set(claims.map((c) => c[0]).filter((k) => k instanceof edn.Keyword));
+  const untypedNs = new Map();
+  for (const { pack } of packs) {
+    if (pack.untyped === undefined) continue;
+    if (pack.untyped !== 'relation') {
+      problems.push({ severity: 'error', problem: kw('relation-not-understood'), source: kw(pack.id), given: pack.untyped,
+                      reason: "untyped is 'relation' (a key no source gives a verb is a dependency already)" });
+      continue;
+    }
+    for (const n of [...(pack.vocabulary || [])].sort()) if (!untypedNs.has(n)) untypedNs.set(n, kw(pack.id));
+  }
+  const untyped = new Map();
+  for (const e of entities.values())
+    for (const k of (e.entry || new Map()).keys())
+      if (isQualifiedKeyword(k) && !said.has(k) && untypedNs.has(k.namespace) && !untyped.has(k)) {
+        untyped.set(k, untypedNs.get(k.namespace));
+        verbs.set(k, k);
+      }
   for (const [k, cs] of [...byKey].sort(([a], [b]) => a.text.slice(1).localeCompare(b.text.slice(1)))) {
     const vs = [...new Set(cs.map((c) => c[1]))];
     const ds = [...new Set(cs.map(dependsOf))];
@@ -283,7 +307,7 @@ function relationsOf(cfg, packs) {
       problems.push(p);
     }
   }
-  return { verbs, depending, problems };
+  return { verbs, depending, problems, untyped: new Map([...untyped].sort(([a], [b]) => a.text.localeCompare(b.text))) };
 }
 
 function normaliseProblem(p, pack) {
