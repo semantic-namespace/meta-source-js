@@ -4,7 +4,8 @@
 // key given twice with the same value is fine; any other key given with
 // different values is a conflict, reported with every source that gave it,
 // and left out of the entity; a key whose policy is :union takes the union
-// of every source's set.
+// of every source's set, and one whose policy is :each (a key saying where
+// an id is declared) the set of every source's value, one per declaration.
 const { EdnSet, equal, itemsOf, prStr } = require('./edn');
 
 const label = (s) => prStr(new Map([['file', s.file], ['line', s.line]]));
@@ -12,7 +13,7 @@ const sortSources = (xs) => [...new Map(xs.map((s) => [label(s), s])).values()].
 
 /**
  * sources: [{source: {file, line}, entities: Map(id -> Map(key -> value))}]
- * policy: Map(key -> ':union')
+ * policy: Map(key -> ':union' | ':each')
  * -> {entities: Map(id -> Map), provenance: Map(id -> Map(key -> [source])), conflicts: [...]}
  */
 function mergeSources(sources, policy = new Map()) {
@@ -37,6 +38,10 @@ function mergeSources(sources, policy = new Map()) {
       prov.set(k, sortSources(gs.map((g) => g.source)));
       if (policy.get(k) === ':union') {
         entry.set(k, new EdnSet(gs.flatMap((g) => itemsOf(g.v))));
+        continue;
+      }
+      if (policy.get(k) === ':each') {
+        entry.set(k, new EdnSet(gs.map((g) => g.v)));
         continue;
       }
       const byValue = [];

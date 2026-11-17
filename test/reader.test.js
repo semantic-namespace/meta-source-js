@@ -187,3 +187,21 @@ test('relations: {:verb v :depends true} is a relation and a dependency; :depend
                          ["dataflow is no dependency: :depends true goes with :depends or a verb of the project's own"]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('merge: one id declared in two places, a key saying where: a conflict, unless :merge says :each, which keeps one value per declaration', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ms-each-'));
+  fs.mkdirSync(path.join(dir, 'registry'));
+  fs.writeFileSync(path.join(dir, 'registry', 'desktop.edn'), '{:route/home {:site/router :site/desktop :site/path "/"}}\n');
+  fs.writeFileSync(path.join(dir, 'registry', 'mobile.edn'), '{:route/home {:site/router :site/mobile :site/path "/"}}\n');
+  const build = (merge) => {
+    fs.writeFileSync(path.join(dir, 'meta-source.edn'), `{:registry ["registry"]${merge}}\n`);
+    return index.build(index.config(dir));
+  };
+  const conflicts = (i) => toJson(index.check(i)).filter((p) => p.problem === 'conflicting-values').map((p) => [p['dev-id'], p.key]);
+  assert.deepStrictEqual(conflicts(build('')), [['route/home', 'site/router']]);
+  const each = build(' :merge {:site/router :each}');
+  assert.deepStrictEqual(conflicts(each), []);
+  const entry = toJson(index.where(each, kw(':route/home')).entry);
+  assert.deepStrictEqual([...entry['site/router']].sort(), ['site/desktop', 'site/mobile']);
+  assert.strictEqual(entry['site/path'], '/');
+});
