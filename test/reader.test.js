@@ -129,6 +129,23 @@ test('relations: a key given two verbs is untyped, an error naming who gave whic
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('relations: a pack giving a key several relations, each with its source: agreeing they type it, disagreeing they conflict, naming each', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ms-js-claims-'));
+  fs.mkdirSync(path.join(dir, 'registry'));
+  fs.writeFileSync(path.join(dir, 'registry', 'r.edn'), '{:adr/cache {:adr/mitigates [:risk/slow] :adr/notes [:risk/slow]}\n :risk/slow {:k/x 1}}');
+  fs.writeFileSync(path.join(dir, 'pack.js'),
+    "module.exports = { id: 'adr', relations: { 'adr/notes': [{ verb: 'adr/notes', source: ':ref/a' }, { verb: 'adr/notes', source: ':ref/b' }],\n" +
+    "  'adr/mitigates': [{ verb: 'adr/mitigates', source: ':ref/a' }, { verb: 'adr/averts', source: ':ref/b' }] } };");
+  fs.writeFileSync(path.join(dir, 'meta-source.edn'), '{:registry ["registry"] :src [] :js {:packs {"./pack.js" {}}}}');
+  const ri = index.build(index.config(dir));
+  assert.strictEqual(toJson(ri.relations.get(kw(':adr/notes'))), 'adr/notes');
+  assert.ok(!ri.relations.has(kw(':adr/mitigates')));
+  assert.deepStrictEqual(toJson(index.check(ri)).filter((p) => p.problem === 'conflicting-relations'),
+                         [{ severity: 'error', problem: 'conflicting-relations', property: 'adr/mitigates',
+                            verbs: { 'adr/averts': ['adr :ref/b'], 'adr/mitigates': ['adr :ref/a'] } }]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("relations: a pack with untyped: 'relation' makes its vocabulary's undeclared keys relations; others stay dependencies", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ms-js-untyped-'));
   fs.mkdirSync(path.join(dir, 'registry'));

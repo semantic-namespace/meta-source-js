@@ -103,6 +103,9 @@ A JS pack is a module exporting an object with an `id` and any of:
   `:relations` in `meta-source.edn` says (`'depends'`, `'consumes'`,
   `'produces'`, or a qualified verb of the pack's own); `{'ns/key': {verb:
   'ns/verb', depends: true}}` for a relation that is a dependency too.
+  A key read from several places takes an array of them, each with its
+  `source` (`[{verb: 'ns/verb', source: ':ref/a'}, ...]`): two that
+  disagree are a `conflicting-relations` error naming each, never one picked.
 - `vocabulary` → `['ns', ...]`: the key namespaces its entries use, and
   `untyped: 'relation'`: a key in them that no source gives a verb is a
   relation by its own name, not a dependency (`:pack/untyped :relation` in
